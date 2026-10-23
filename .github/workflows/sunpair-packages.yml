@@ -1,5 +1,5 @@
 ---
-# Fork only, never sent upstream: builds the packages the sunpair fleet installs (Ubuntu kiosks, macOS)
+# Fork only, never sent upstream: builds the packages the sunpair fleet installs (Ubuntu kiosks, Apple Silicon macOS)
 # from a `sunpair/v<upstream version>` branch, and publishes them on a `v<upstream version>-sunpair<n>` tag.
 name: sunpair packages
 permissions: {}

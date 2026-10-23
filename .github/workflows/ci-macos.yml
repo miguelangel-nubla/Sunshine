@@ -59,10 +59,7 @@ jobs:
             name: "macOS-arm64"
             arch: "arm64"
             build_docs: "ON"
-          - os: "macos-15-intel"
-            name: "macOS-x86_64"
-            arch: "x86_64"
-            build_docs: "OFF"
+          # sunpair fork: no Intel Macs run macOS in the fleet, so the x86_64 build is dropped.
     steps:
       - name: Install Apple certificate
         uses: apple-actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9  # v7.1.0
