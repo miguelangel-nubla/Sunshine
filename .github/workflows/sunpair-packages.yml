@@ -1,0 +1,131 @@
+---
+# Fork only, never sent upstream: builds the packages the sunpair fleet installs (Ubuntu kiosks, macOS)
+# from a `sunpair/v<upstream version>` branch, and publishes them on a `v<upstream version>-sunpair<n>` tag.
+name: sunpair packages
+permissions: {}
+
+on:
+  push:
+    branches:
+      - 'sunpair/**'
+    tags:
+      - 'v*-sunpair*'
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: Version
+    permissions: {}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Version from ref
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # sunpair/v2026.1018.5342 or v2026.1018.5342-sunpair1 -> 2026.1018.5342 (CMake needs a numeric version)
+          version="${REF_NAME#sunpair/}"
+          version="${version#v}"
+          version="${version%%-*}"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::cannot derive a version from ${REF_NAME}"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  ubuntu:
+    name: Ubuntu ${{ matrix.ubuntu }}
+    needs: version
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ubuntu: "24.04"
+            target: ubuntu-24-04
+          - ubuntu: "26.04"
+            target: ubuntu-26-04
+    steps:
+      - name: More space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Skip CUDA
+        # The fleet has no NVIDIA GPUs (AMD/Intel use VAAPI), so skip the CUDA download and NVENC build.
+        run: |
+          sed -i 's/--sudo-off$/--sudo-off --skip-cuda/' docker/debian.dockerfile
+          grep -q -- '--skip-cuda' docker/debian.dockerfile
+
+      - name: Build, test and package
+        env:
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          docker buildx bake -f docker-bake.hcl "${TARGET}" --progress=plain \
+            --set "${TARGET}.platform=linux/amd64" \
+            --set "${TARGET}.output=type=local,dest=out" \
+            --set "${TARGET}.args.BUILD_VERSION=${VERSION}" \
+            --set "${TARGET}.args.BRANCH=${BRANCH}" \
+            --set "${TARGET}.args.COMMIT=${COMMIT}"
+          ls -l out/artifacts/
+
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: sunpair-ubuntu-${{ matrix.ubuntu }}
+          path: out/artifacts/*.deb
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    needs: version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-macos.yml
+    with:
+      publish_release: 'false'  # unsigned: no Developer ID in this fork
+      release_commit: ${{ github.sha }}
+      release_version: ${{ needs.version.outputs.version }}
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - ubuntu
+      - macos
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          path: dist
+          pattern: '{sunpair-ubuntu-*,build-macOS-*}'
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist/
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          gh release create "${TAG}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${TAG}" \
+            --notes "Upstream ${TAG%%-*} plus client certificate fingerprints in the web API. Built by sunpair-packages.yml (no CUDA; macOS builds are unsigned)."
