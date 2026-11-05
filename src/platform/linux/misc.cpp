@@ -1307,71 +1307,9 @@ namespace platf {
 #endif
 
   /**
-   * @brief Choose the capture method (sources) when none is chosen yet.
-   *
-   * Run at startup and again before each probe while nothing is chosen: KMS lists only lit
-   * displays, so with every screen blanked at startup no method is found then.
-   * @return Whether a capture method is chosen.
-   */
-  static bool detect_sources() {
-    if (sources.any()) {
-      return true;
-    }
-    // Avoid mutating config directly if Portal needs to run in fallback capture mode.
-    std::string selected_capture = config::video.capture;
-
-    // When Portal is explicitly selected, probe it first so other capture methods can be considered for fallback capture.
-#ifdef SUNSHINE_BUILD_PORTAL
-    bool portal_available = false;
-    if (selected_capture == "portal") {
-      portal_available = verify_portal();
-      if (!portal_available) {
-        // Continue probing for fallback capture methods.
-        selected_capture.clear();
-      }
-    }
-#endif
-#ifdef SUNSHINE_BUILD_CUDA
-    if (((selected_capture.empty() && sources.none()) || selected_capture == "nvfbc") && verify_nvfbc()) {
-      sources[source::NVFBC] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_WAYLAND
-    if (((selected_capture.empty() && sources.none()) || selected_capture == "wlr") && verify_wl()) {
-      sources[source::WAYLAND] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_DRM
-    if (((selected_capture.empty() && sources.none()) || selected_capture == "kms") && verify_kms()) {
-      sources[source::KMS] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_X11
-    // We enumerate this capture backend regardless of other suitable sources,
-    // since it may be needed as a NvFBC fallback for software encoding on X11.
-    if ((selected_capture.empty() || selected_capture == "x11") && verify_x11()) {
-      sources[source::X11] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_KWIN
-    if (((selected_capture.empty() && sources.none()) || selected_capture == "kwin") && verify_kwin()) {
-      sources[source::KWIN] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_PORTAL
-    if (portal_available || (config::video.capture.empty() && sources.none() && verify_portal())) {
-      sources[source::PORTAL] = true;
-    }
-#endif
-
-    return sources.any();
-  }
-
-  /**
    * @brief List display names accepted by the selected capture backend.
    */
   std::vector<std::string> display_names(mem_type_e hwdevice_type) {
-    detect_sources();
 #ifdef SUNSHINE_BUILD_CUDA
     // display using NvFBC only supports mem_type_e::cuda
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
@@ -1425,11 +1363,6 @@ namespace platf {
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
-    if (!detect_sources()) {
-      // Nothing to capture yet, and nothing decided: the DRM worker keeps its privileges for KMS.
-      return nullptr;
-    }
-
     // Please ensure that KMS followed by CUDA remains at the top so that we can
     // drop DRM worker privileges once neither backend requires it.
 
@@ -1518,11 +1451,56 @@ namespace platf {
     }
 #endif
 
-    // No capture method yet is not fatal: with KMS that only means no display is lit (screens
-    // blanked by the session's power saving at startup), and display_names() and display() look
-    // again before each probe. Giving up here left the process without capture until restarted.
-    if (!detect_sources()) {
-      BOOST_LOG(warning) << "No capture method yet (no display lit?): looking again before each stream"sv;
+    // Avoid mutating config directly if Portal needs to run in fallback capture mode.
+    std::string selected_capture = config::video.capture;
+
+    // When Portal is explicitly selected, probe it first so other capture methods can be considered for fallback capture.
+#ifdef SUNSHINE_BUILD_PORTAL
+    bool portal_available = false;
+    if (selected_capture == "portal") {
+      portal_available = verify_portal();
+      if (!portal_available) {
+        // Continue probing for fallback capture methods.
+        selected_capture.clear();
+      }
+    }
+#endif
+#ifdef SUNSHINE_BUILD_CUDA
+    if (((selected_capture.empty() && sources.none()) || selected_capture == "nvfbc") && verify_nvfbc()) {
+      sources[source::NVFBC] = true;
+    }
+#endif
+#ifdef SUNSHINE_BUILD_WAYLAND
+    if (((selected_capture.empty() && sources.none()) || selected_capture == "wlr") && verify_wl()) {
+      sources[source::WAYLAND] = true;
+    }
+#endif
+#ifdef SUNSHINE_BUILD_DRM
+    if (((selected_capture.empty() && sources.none()) || selected_capture == "kms") && verify_kms()) {
+      sources[source::KMS] = true;
+    }
+#endif
+#ifdef SUNSHINE_BUILD_X11
+    // We enumerate this capture backend regardless of other suitable sources,
+    // since it may be needed as a NvFBC fallback for software encoding on X11.
+    if ((selected_capture.empty() || selected_capture == "x11") && verify_x11()) {
+      sources[source::X11] = true;
+    }
+#endif
+#ifdef SUNSHINE_BUILD_KWIN
+    if (((selected_capture.empty() && sources.none()) || selected_capture == "kwin") && verify_kwin()) {
+      sources[source::KWIN] = true;
+    }
+#endif
+#ifdef SUNSHINE_BUILD_PORTAL
+    if (portal_available || (config::video.capture.empty() && sources.none() && verify_portal())) {
+      sources[source::PORTAL] = true;
+    }
+#endif
+
+    if (sources.none()) {
+      BOOST_LOG(error) << "Unable to initialize capture method"sv;
+      return nullptr;
     }
 
     if (!gladLoaderLoadEGL(NULL)) {
