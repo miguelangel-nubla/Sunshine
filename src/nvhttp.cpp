@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <thread>
 #include <filesystem>
 #include <format>
 #include <mutex>
@@ -44,6 +45,25 @@
 using namespace std::literals;
 
 namespace nvhttp {
+
+  /**
+   * @brief Probe the encoders for a stream about to start, giving displays a few seconds to light up.
+   *
+   * A launch request can find every display off (power saving), and whatever wakes them (the host
+   * reacting to the request) needs a moment; refusing at once made the first request always fail.
+   * @return 0 once an encoder works, nonzero if none does within the wait.
+   */
+  static int probe_encoders_for_stream() {
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (video::probe_encoders()) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return -1;
+      }
+      BOOST_LOG(info) << "No working encoder yet (a display waking up?): trying again"sv;
+      std::this_thread::sleep_for(500ms);
+    }
+    return 0;
+  }
 
   static constexpr std::string_view EMPTY_PROPERTY_TREE_ERROR_MSG = "Property tree is empty. Probably, control flow got interrupted by an unexpected C++ exception. This is a bug in Sunshine. Moonlight-qt will report Malformed XML (missing root element)."sv;
 
@@ -1429,7 +1449,7 @@ namespace nvhttp {
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
-      if (video::probe_encoders()) {
+      if (probe_encoders_for_stream()) {
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
         tree.put("root.gamesession", 0);
@@ -1541,7 +1561,7 @@ namespace nvhttp {
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
-      if (video::probe_encoders()) {
+      if (probe_encoders_for_stream()) {
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
